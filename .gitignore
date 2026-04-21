@@ -1,0 +1,24 @@
+# Build artifacts
+build/
+dist/
+*.spec.bak
+*.egg-info/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.Python
+.venv/
+venv/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# User data (only exists on machines that ran the app)
+*.log
+*.crash
