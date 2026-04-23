@@ -4,7 +4,9 @@ REM     build.bat
 REM Output: dist\Petris.exe
 setlocal
 
-cd /d "%~dp0"
+REM pushd (unlike "cd /d") maps a temporary drive letter for UNC paths,
+REM so this works when run from a \\wsl.localhost\... path.
+pushd "%~dp0" || (echo failed to cd to script dir & exit /b 1)
 
 echo [1/3] installing build deps...
 py -m pip install --upgrade pip pyinstaller >nul
@@ -21,7 +23,9 @@ echo.
 if exist dist\Petris.exe (
     echo done. binary: dist\Petris.exe
     for %%A in (dist\Petris.exe) do echo size: %%~zA bytes
+    popd
 ) else (
     echo build failed.
+    popd
     exit /b 1
 )
