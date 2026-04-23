@@ -551,7 +551,7 @@ class HoverWindow(QWidget):
             bottom_anchored = abs((self.y() + self.height()) - geo.bottom()) <= tol
 
             new_x = (geo.right() - new_w - SNAP_MARGIN) if right_anchored else self.x()
-            new_y = (geo.bottom() - new_h - SNAP_MARGIN) if bottom_anchored else self.y()
+            new_y = (geo.bottom() - new_h + 1) if bottom_anchored else self.y()
             self.move(new_x, new_y)
 
         self.resize(new_w, new_h)
@@ -640,14 +640,16 @@ class HoverWindow(QWidget):
             return
         geo = screen.availableGeometry()
         w, h = self.width(), self.height()
+        # Bottom edge hugs the taskbar (no margin); top/sides keep SNAP_MARGIN.
+        # QRect.bottom() is inclusive, so flush-bottom is `bottom() - h + 1`.
         if corner == 'tl':
             x, y = geo.left() + SNAP_MARGIN, geo.top() + SNAP_MARGIN
         elif corner == 'tr':
             x, y = geo.right() - w - SNAP_MARGIN, geo.top() + SNAP_MARGIN
         elif corner == 'bl':
-            x, y = geo.left() + SNAP_MARGIN, geo.bottom() - h - SNAP_MARGIN
+            x, y = geo.left() + SNAP_MARGIN, geo.bottom() - h + 1
         else:
-            x, y = geo.right() - w - SNAP_MARGIN, geo.bottom() - h - SNAP_MARGIN
+            x, y = geo.right() - w - SNAP_MARGIN, geo.bottom() - h + 1
         # Sidebar faces inward so it doesn't end up off-screen.
         self._sidebar_side = 'right' if corner in ('tl', 'bl') else 'left'
         self._reposition_sidebar()
