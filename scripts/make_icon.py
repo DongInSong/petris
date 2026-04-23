@@ -6,24 +6,33 @@ from PIL import Image, ImageDraw
 
 SIZE = 1024
 
-# Tetris-flavored mint (close to the I-piece cyan family but warmer).
-MINT = (94, 234, 212)
-MINT_LIGHT = (140, 244, 224)  # head — slightly lighter so the face block pops
-EYE = (14, 40, 50)
+# Deepened teal (V dropped from ~92% to ~70%) so the icon doesn't glare on
+# light-mode taskbars while still reading as the same piece family.
+MINT = (64, 176, 156)
+MINT_LIGHT = (96, 204, 180)   # head — slightly lighter so the face block pops
+EYE = (16, 42, 52)
+# Dark outline around each block. Gives edge definition against both
+# near-white (taskbar/browser) and near-black (dark taskbar) backgrounds.
+OUTLINE = (20, 52, 58)
 
 
 def _block(draw: ImageDraw.ImageDraw, x: int, y: int, s: int, rgb: tuple,
            face: bool = False) -> None:
     r, g, b = rgb
-    draw.rectangle((x, y, x + s - 1, y + s - 1), fill=(r, g, b, 255))
-    # Soft 1-step highlight / shadow for just enough depth at small sizes.
-    edge = max(3, s // 24)
-    hi = (min(255, r + 28), min(255, g + 20), min(255, b + 18), 255)
-    draw.rectangle((x, y, x + s - 1, y + edge), fill=hi)
-    draw.rectangle((x, y, x + edge, y + s - 1), fill=hi)
-    sh = (max(0, r - 60), max(0, g - 60), max(0, b - 60), 255)
-    draw.rectangle((x, y + s - edge, x + s - 1, y + s - 1), fill=sh)
-    draw.rectangle((x + s - edge, y, x + s - 1, y + s - 1), fill=sh)
+    ow = max(1, s // 40)
+    # Outline first, then inset fill.
+    draw.rectangle((x, y, x + s - 1, y + s - 1), fill=OUTLINE + (255,))
+    ix0, iy0 = x + ow, y + ow
+    ix1, iy1 = x + s - 1 - ow, y + s - 1 - ow
+    draw.rectangle((ix0, iy0, ix1, iy1), fill=(r, g, b, 255))
+    # Soft 1-step highlight / shadow inside the inset for just enough depth at small sizes.
+    edge = max(2, s // 28)
+    hi = (min(255, r + 30), min(255, g + 22), min(255, b + 20), 255)
+    draw.rectangle((ix0, iy0, ix1, iy0 + edge), fill=hi)
+    draw.rectangle((ix0, iy0, ix0 + edge, iy1), fill=hi)
+    sh = (max(0, r - 45), max(0, g - 40), max(0, b - 36), 255)
+    draw.rectangle((ix0, iy1 - edge, ix1, iy1), fill=sh)
+    draw.rectangle((ix1 - edge, iy0, ix1, iy1), fill=sh)
     if face:
         ez = max(4, s // 8)
         ey = y + int(s * 0.38)

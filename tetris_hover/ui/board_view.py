@@ -18,6 +18,23 @@ PREVIEW_COUNT = 4
 SCORE_BUMP_MS = 350
 SCORE_BUMP_MAX = 1.35
 
+# 8-direction offsets for drawing a text outline. A plain drop shadow only
+# helps against dark backgrounds — the overlay can sit over a white browser
+# or bright wallpaper, so we stroke in every direction.
+_OUTLINE_OFFSETS = ((-1, -1), (-1, 0), (-1, 1),
+                    (0, -1),           (0, 1),
+                    (1, -1),  (1, 0),  (1, 1))
+
+
+def _draw_outlined_text(p: QPainter, x: int, y: int, text: str,
+                        fill: QColor, outline_alpha: int = 210) -> None:
+    outline = QColor(0, 0, 0, outline_alpha)
+    p.setPen(outline)
+    for dx, dy in _OUTLINE_OFFSETS:
+        p.drawText(x + dx, y + dy, text)
+    p.setPen(fill)
+    p.drawText(x, y, text)
+
 
 def _bump_scale(elapsed_ms: float) -> float:
     """Ease the bounce: 1.0 → SCORE_BUMP_MAX at the halfway point → 1.0."""
@@ -129,16 +146,10 @@ class BoardView(QWidget):
         cx = bx + bw // 2
         ty = by + int(bh * 0.12) + th // 2  # near top of playfield
 
-        # Soft drop shadow for legibility against blocks.
-        shadow = QColor(0, 0, 0, 140)
-        p.setPen(shadow)
-        p.drawText(cx - tw // 2 + 1, ty + 1, text)
-
         # Bump glow: stronger color during bounce, softer when resting.
         glow_strength = int(60 + 120 * (scale - 1.0) / (SCORE_BUMP_MAX - 1.0)) if scale > 1.0 else 60
         main = QColor(255, 255, 255, 180 + min(60, glow_strength))
-        p.setPen(main)
-        p.drawText(cx - tw // 2, ty, text)
+        _draw_outlined_text(p, cx - tw // 2, ty, text, main)
 
         # Always-visible multiplier readout right under the score. Color tints
         # cool → warm with speed so it's obvious when typing is registering.
@@ -156,10 +167,8 @@ class BoardView(QWidget):
         mg = int(220 - 70 * frac)
         mb = int(230 - 180 * frac)
         malpha = int(140 + 100 * frac)
-        p.setPen(QColor(0, 0, 0, 140))
-        p.drawText(cx - mtw // 2 + 1, ty + th - 2 + 1, mtext)
-        p.setPen(QColor(mr, mg, mb, malpha))
-        p.drawText(cx - mtw // 2, ty + th - 2, mtext)
+        _draw_outlined_text(p, cx - mtw // 2, ty + th - 2, mtext,
+                            QColor(mr, mg, mb, malpha))
 
     @staticmethod
     def _format_score(score: float) -> str:
