@@ -25,14 +25,59 @@ _OUTLINE_OFFSETS = ((-1, -1), (-1, 0), (-1, 1),
                     (0, -1),           (0, 1),
                     (1, -1),  (1, 0),  (1, 1))
 
+# Alpha steps for the neon halo passes (outermost → innermost). Actual pixel
+# radii are derived per-call from font height so small text doesn't get
+# swamped by a fixed 4 px glow.
+_NEON_GLOW_ALPHAS = (28, 70, 130, 200)
+
 
 def _draw_outlined_text(p: QPainter, x: int, y: int, text: str,
-                        fill: QColor, outline_alpha: int = 210) -> None:
-    outline = QColor(0, 0, 0, outline_alpha)
+                        fill: QColor,
+                        outline_rgb: tuple = (0, 0, 0),
+                        outline_alpha: int = 210) -> None:
+    outline = QColor(outline_rgb[0], outline_rgb[1], outline_rgb[2], outline_alpha)
     p.setPen(outline)
     for dx, dy in _OUTLINE_OFFSETS:
         p.drawText(x + dx, y + dy, text)
     p.setPen(fill)
+    p.drawText(x, y, text)
+
+
+def _draw_neon_text(p: QPainter, x: int, y: int, text: str,
+                    glow_rgb: tuple, core_alpha: int = 250) -> None:
+    """Cyberpunk halo on a transparent canvas: dark backstop → colored glow
+    → lit core. The backstop is what keeps the text readable on white
+    wallpapers (saturated colors alone disappear into bright pixels). Glow
+    radius is derived from font height so a tiny multiplier readout doesn't
+    drown under the same halo as the big score number.
+    """
+    # Dark backstop: a single tight outline that anchors the glyphs against
+    # bright wallpapers and gives the colored halo a darker pixel to land on.
+    # Kept to radius 1 so small text (multiplier at 50% scale) doesn't get
+    # eaten by its own outline.
+    p.setPen(QColor(0, 0, 0, 200))
+    for dx, dy in _OUTLINE_OFFSETS:
+        p.drawText(x + dx, y + dy, text)
+
+    fh = p.fontMetrics().height()
+    # Outer radius ~12% of text height, capped at 4 px. At 7 pt this is 1 px;
+    # at 24 pt it's 4 px. Inner passes step down to 1.
+    outer = max(1, min(4, fh * 12 // 100))
+    radii = (outer,
+             max(1, outer * 3 // 4),
+             max(1, outer // 2),
+             1)
+    for radius, alpha in zip(radii, _NEON_GLOW_ALPHAS):
+        p.setPen(QColor(glow_rgb[0], glow_rgb[1], glow_rgb[2], alpha))
+        for dx, dy in _OUTLINE_OFFSETS:
+            p.drawText(x + dx * radius, y + dy * radius, text)
+    # Core: brighten by a fixed amount so the color stays recognizable (cyan
+    # ×1.0 reads as cyan, not pale lavender) while still being clearly lighter
+    # than the saturated halo behind it.
+    cr = min(255, glow_rgb[0] + 100)
+    cg = min(255, glow_rgb[1] + 100)
+    cb = min(255, glow_rgb[2] + 100)
+    p.setPen(QColor(cr, cg, cb, core_alpha))
     p.drawText(x, y, text)
 
 
@@ -106,7 +151,8 @@ class BoardView(QWidget):
         bx, by, bw, bh = self._board_rect(cell)
 
         # Fully transparent playfield — blocks float against whatever is behind
-        # the widget (desktop, taskbar). No fill, no border.
+        # the widget (desktop, taskbar). No fill, no border. Neon's per-block
+        # shadow gives local contrast without painting a panel.
 
         self._draw_stack(painter, bx, by, cell)
         if self.game.piece is not None:
@@ -146,29 +192,43 @@ class BoardView(QWidget):
         cx = bx + bw // 2
         ty = by + int(bh * 0.12) + th // 2  # near top of playfield
 
-        # Bump glow: stronger color during bounce, softer when resting.
-        glow_strength = int(60 + 120 * (scale - 1.0) / (SCORE_BUMP_MAX - 1.0)) if scale > 1.0 else 60
-        main = QColor(255, 255, 255, 180 + min(60, glow_strength))
-        _draw_outlined_text(p, cx - tw // 2, ty, text, main)
+        theme = self.theme
+        score_rgb = theme.score_rgb
+        if theme.text_glow:
+            _draw_neon_text(p, cx - tw // 2, ty, text, score_rgb)
+        else:
+            # Bump glow: stronger color during bounce, softer when resting.
+            glow_strength = int(60 + 120 * (scale - 1.0) / (SCORE_BUMP_MAX - 1.0)) if scale > 1.0 else 60
+            main = QColor(score_rgb[0], score_rgb[1], score_rgb[2],
+                          180 + min(60, glow_strength))
+            _draw_outlined_text(p, cx - tw // 2, ty, text, main,
+                                outline_rgb=theme.text_outline_rgb)
 
-        # Always-visible multiplier readout right under the score. Color tints
-        # cool → warm with speed so it's obvious when typing is registering.
+        # Always-visible multiplier readout right under the score. Color
+        # interpolates between theme-defined low/high endpoints with speed.
         m = self._multiplier
         mfont = QFont()
         mfont.setFamily("Consolas")
-        mfont.setPointSize(max(7, base_pt // 2))
+        # Bumped from base_pt//2 → ~62%. The old size sat just at the edge of
+        # legible at small board scales and got swamped by the neon halo.
+        mfont.setPointSize(max(9, base_pt * 5 // 8))
         mfont.setBold(True)
         p.setFont(mfont)
         mtext = f"×{m:.1f}"
         mfm = p.fontMetrics()
         mtw = mfm.horizontalAdvance(mtext)
         frac = max(0.0, min(1.0, (m - 1.0) / 7.0))
-        mr = int(180 + 75 * frac)
-        mg = int(220 - 70 * frac)
-        mb = int(230 - 180 * frac)
-        malpha = int(140 + 100 * frac)
-        _draw_outlined_text(p, cx - mtw // 2, ty + th - 2, mtext,
-                            QColor(mr, mg, mb, malpha))
+        lo, hi = theme.multiplier_low_rgb, theme.multiplier_high_rgb
+        mr = int(lo[0] + (hi[0] - lo[0]) * frac)
+        mg = int(lo[1] + (hi[1] - lo[1]) * frac)
+        mb = int(lo[2] + (hi[2] - lo[2]) * frac)
+        if theme.text_glow:
+            _draw_neon_text(p, cx - mtw // 2, ty + th - 2, mtext, (mr, mg, mb))
+        else:
+            malpha = int(230 + 25 * frac)
+            _draw_outlined_text(p, cx - mtw // 2, ty + th - 2, mtext,
+                                QColor(mr, mg, mb, malpha),
+                                outline_rgb=theme.text_outline_rgb)
 
     @staticmethod
     def _format_score(score: float) -> str:
@@ -224,6 +284,9 @@ class BoardView(QWidget):
         if ghost:
             p.fillRect(x, y, cell, cell, QColor(rgb[0], rgb[1], rgb[2], alpha))
             return
+        if self.theme.block_glow:
+            self._draw_cell_neon(p, x, y, cell, rgb, alpha)
+            return
         base = QColor(rgb[0], rgb[1], rgb[2], alpha)
         p.fillRect(x, y, cell, cell, base)
         # Highlight edge (top + left)
@@ -234,6 +297,50 @@ class BoardView(QWidget):
         sh = QColor(max(0, rgb[0] - 60), max(0, rgb[1] - 60), max(0, rgb[2] - 60), alpha)
         p.fillRect(x, y + cell - 2, cell, 2, sh)
         p.fillRect(x + cell - 2, y, 2, cell, sh)
+
+    def _draw_cell_neon(self, p: QPainter, x: int, y: int, cell: int,
+                        rgb: tuple, alpha: int) -> None:
+        """Cyberpunk lit-tube look on a transparent canvas. Three layers:
+          1. Dark drop-shadow halo — gives bright wallpapers a local "wall"
+             for the colored glow to land on; invisible on dark backgrounds.
+          2. Colored glow halo — the actual neon bleed, on top of the shadow.
+          3. Dim interior + bright rim — the lit glass tube itself.
+        Adjacent cells' shadows stack into a darker zone (good — reads as a
+        single lit object), while empty cells stay fully transparent.
+        """
+        # Layer 1: black drop-shadow halo. Reach a bit further than the color
+        # halo so the colored bleed always lands on a darker pixel.
+        sh_r = max(2, cell // 4)
+        for r, base_a in ((sh_r, 30), (max(1, sh_r * 2 // 3), 70),
+                          (max(1, sh_r // 3), 120)):
+            sa = base_a * alpha // 255 if alpha < 255 else base_a
+            p.fillRect(x - r, y - r, cell + 2 * r, cell + 2 * r,
+                       QColor(0, 0, 0, sa))
+        # Layer 2: colored glow. Tighter radius than the shadow so the dark
+        # outer ring frames the colored inner ring.
+        glow_r = max(2, cell // 6)
+        for r, base_a in ((glow_r, 60), (max(1, glow_r // 2), 130)):
+            ga = base_a * alpha // 255 if alpha < 255 else base_a
+            p.fillRect(x - r, y - r, cell + 2 * r, cell + 2 * r,
+                       QColor(rgb[0], rgb[1], rgb[2], ga))
+        # Layer 3: dimmed interior + bright rim — the glass tube. Skip the dim
+        # interior on tiny cells where the rim would already eat the square.
+        if cell >= 10:
+            dim = QColor(rgb[0] * 32 // 100, rgb[1] * 32 // 100,
+                         rgb[2] * 32 // 100, alpha)
+            p.fillRect(x, y, cell, cell, dim)
+            rim_w = 2 if cell >= 14 else 1
+        else:
+            p.fillRect(x, y, cell, cell, QColor(rgb[0], rgb[1], rgb[2], alpha))
+            rim_w = 1
+        # Bright rim — pushed close to white so it reads as the lit gas inside
+        # the glass, not just a slightly-lighter version of the fill.
+        rim = QColor(min(255, rgb[0] + 130), min(255, rgb[1] + 130),
+                     min(255, rgb[2] + 130), alpha)
+        p.fillRect(x, y, cell, rim_w, rim)
+        p.fillRect(x, y + cell - rim_w, cell, rim_w, rim)
+        p.fillRect(x, y, rim_w, cell, rim)
+        p.fillRect(x + cell - rim_w, y, rim_w, cell, rim)
 
     def _draw_hold(self, p: QPainter, ox: int, oy: int, cell: int) -> None:
         kind = self.game.hold

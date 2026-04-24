@@ -46,7 +46,9 @@ from PySide6.QtWidgets import (
 from ..core.game import Game
 from ..settings import Settings
 from .board_view import BoardView
-from .themes import AMBIENT, VIVID, Theme
+from .themes import AMBIENT, NEON, ORDER as THEME_ORDER, Theme, VIVID, get as get_theme
+
+THEME_GLYPHS = {'ambient': '○', 'vivid': '●', 'neon': '◆'}
 
 # Side bar is a fixed-size overlay on the right edge; its dimensions don't
 # change with UI scale, so buttons never squish.
@@ -112,10 +114,8 @@ QSlider::sub-page:horizontal { background: rgba(120, 170, 220, 200); border-radi
 
 
 def _theme_from_name(name: str, fallback: Theme) -> Theme:
-    if name == 'vivid':
-        return VIVID
-    if name == 'ambient':
-        return AMBIENT
+    if name in THEME_ORDER:
+        return get_theme(name)
     return fallback
 
 
@@ -342,7 +342,7 @@ class HoverWindow(QWidget):
 
         # Reflect persisted settings onto controls built above.
         self.btn_scale.setText(str(init_pct))
-        self.btn_theme.setText("●" if self.theme is VIVID else "○")
+        self.btn_theme.setText(THEME_GLYPHS.get(self.theme.name, '○'))
 
         self.tray: Optional[QSystemTrayIcon] = None
         if QSystemTrayIcon.isSystemTrayAvailable():
@@ -432,12 +432,10 @@ class HoverWindow(QWidget):
         menu.addSeparator()
 
         theme_menu = menu.addMenu("theme")
-        act_amb = QAction("ambient", theme_menu)
-        act_amb.triggered.connect(lambda: self._set_theme(AMBIENT))
-        act_viv = QAction("vivid", theme_menu)
-        act_viv.triggered.connect(lambda: self._set_theme(VIVID))
-        theme_menu.addAction(act_amb)
-        theme_menu.addAction(act_viv)
+        for label, theme_obj in (("ambient", AMBIENT), ("vivid", VIVID), ("neon", NEON)):
+            act = QAction(label, theme_menu)
+            act.triggered.connect(lambda _=False, t=theme_obj: self._set_theme(t))
+            theme_menu.addAction(act)
 
         snap_menu = menu.addMenu("snap to")
         for label, key in (("↖ top-left", 'tl'), ("↗ top-right", 'tr'),
@@ -515,13 +513,20 @@ class HoverWindow(QWidget):
             return
         self.theme = theme
         self.view.set_theme(theme)
-        self.btn_theme.setText("●" if theme is VIVID else "○")
-        self.btn_theme.setToolTip(f"theme: {theme.name} (click to toggle)")
+        self.btn_theme.setText(THEME_GLYPHS.get(theme.name, '○'))
+        self.btn_theme.setToolTip(f"theme: {theme.name} (click to cycle)")
         self.settings.theme = theme.name
         self._persist_settings()
 
     def _toggle_theme(self) -> None:
-        self._set_theme(VIVID if self.theme is AMBIENT else AMBIENT)
+        # Cycle through THEME_ORDER so the single button keeps working as
+        # themes get added (ambient → vivid → neon → ambient).
+        try:
+            idx = THEME_ORDER.index(self.theme.name)
+        except ValueError:
+            idx = -1
+        nxt = THEME_ORDER[(idx + 1) % len(THEME_ORDER)]
+        self._set_theme(get_theme(nxt))
 
     def _set_ai_mode(self, mode: str) -> None:
         if mode not in ('calm', 'tetris', 'tspin'):

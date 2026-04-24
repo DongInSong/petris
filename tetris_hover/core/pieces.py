@@ -105,6 +105,18 @@ COLORS_AMBIENT: Dict[str, Tuple[int, int, int]] = {
     'L': (220, 195, 165),
 }
 
+# Saturated neon/cyberpunk palette: cyan + magenta dominate, hot lime + electric
+# blue accents. Designed to glow on the dark backdrop, not blend with desktop.
+COLORS_NEON: Dict[str, Tuple[int, int, int]] = {
+    'I': (0, 255, 255),
+    'O': (255, 235, 80),
+    'T': (255, 60, 200),
+    'S': (80, 255, 100),
+    'Z': (255, 60, 100),
+    'J': (80, 130, 255),
+    'L': (255, 130, 30),
+}
+
 BOARD_W = 10
 BOARD_H = 20
 BUFFER = 4
