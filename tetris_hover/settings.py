@@ -31,6 +31,10 @@ class Settings:
     ai_mode: str = "tetris"
     # Percent of today's accumulated score deducted on each top-out.
     death_penalty_pct: float = 10.0
+    # Fade window opacity after a stretch of no typing, restore on next key.
+    idle_fade_enabled: bool = True
+    # Hide to tray while another app is in D3D fullscreen / presentation mode.
+    fullscreen_autohide_enabled: bool = True
 
     @classmethod
     def load(cls) -> "Settings":

@@ -23,6 +23,27 @@ FRAME_MS = 16
 AUTOSAVE_MS = 30_000
 # Count a second as "active" if a keystroke occurred within this many ms of it.
 ACTIVE_WINDOW_MS = 3_000
+# Poll cadence for the fullscreen-app check (Win32 shell call). Once a second
+# is plenty — the user doesn't notice a 1s delay before Petris hides for a game.
+FULLSCREEN_CHECK_MS = 1_000
+
+
+def _is_other_app_fullscreen() -> bool:
+    """True if a D3D fullscreen app or presentation-mode app is foregrounded.
+    Windows-only; returns False on other platforms (so auto-hide is a no-op)."""
+    if sys.platform != 'win32':
+        return False
+    try:
+        import ctypes
+        state = ctypes.c_int(0)
+        # SHQueryUserNotificationState: same signal Windows uses to suppress
+        # notifications. 3 = QUNS_RUNNING_D3D_FULL_SCREEN, 4 = QUNS_PRESENTATION_MODE.
+        hr = ctypes.windll.shell32.SHQueryUserNotificationState(ctypes.byref(state))
+        if hr != 0:
+            return False
+        return state.value in (3, 4)
+    except Exception:
+        return False
 
 # Gravity: time for a piece to fall one row. Scales with mult^1.5 — fast but
 # not chaotic at high mult. Slam kicks in separately past the threshold.
@@ -57,6 +78,9 @@ class App:
         self._multiplier = 1.0
         self._autosave_ms = 0.0
         self._session_start_wall = time.monotonic() * 1000
+        # Anchor for idle-fade so the fade timer doesn't reset every autosave.
+        self._launch_monotonic_ms = self._session_start_wall
+        self._fullscreen_check_accum_ms = 0.0
         self._last_keystroke_seen = 0
 
         self._elapsed = QElapsedTimer()
@@ -166,6 +190,8 @@ class App:
             return
 
         # Typing → multiplier, keystrokes, active time.
+        wall_now_ms = time.monotonic() * 1000
+        last_press_ms = 0.0
         if self.keyhook is not None:
             self._multiplier = self.keyhook.current_multiplier()
             total = self.keyhook.total_keystrokes()
@@ -174,10 +200,24 @@ class App:
                 self.session.keystrokes += delta_keys
                 self._last_keystroke_seen = total
             last_press_ms = self.keyhook.last_press_ms()
-            wall_now_ms = time.monotonic() * 1000
             if last_press_ms and (wall_now_ms - last_press_ms) <= ACTIVE_WINDOW_MS:
                 self.session.active_ms += dt
         self.window.set_multiplier(self._multiplier)
+
+        # Idle fade: measure from the most recent keystroke (or app launch if
+        # nothing has been pressed yet — using session_start would reset on
+        # every autosave). Window decides the actual opacity blend.
+        ref_ms = last_press_ms if last_press_ms > 0 else self._launch_monotonic_ms
+        idle_sec = max(0.0, (wall_now_ms - ref_ms) / 1000.0)
+        self.window.apply_idle_fade(idle_sec)
+
+        # Fullscreen auto-hide: throttled — the shell call is cheap but there's
+        # no point hammering it 60×/s for a state that only changes when the
+        # user alt-tabs into a game or full-screens a video.
+        self._fullscreen_check_accum_ms += dt
+        if self._fullscreen_check_accum_ms >= FULLSCREEN_CHECK_MS:
+            self._fullscreen_check_accum_ms = 0
+            self.window.apply_fullscreen_autohide(_is_other_app_fullscreen())
 
         # Rotate / lateral moves: discrete steps at move_interval.
         self._move_accum_ms += dt

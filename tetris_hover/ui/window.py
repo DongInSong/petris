@@ -59,6 +59,13 @@ SCALE_PRESETS = [50, 75, 100, 125, 150]
 OPACITY_MIN = 30
 OPACITY_MAX = 100
 
+# Idle fade: window opacity drops smoothly while no keys are pressed, snaps
+# back on the next keystroke. Times in seconds; floor is a fraction applied
+# on top of the user's configured opacity.
+IDLE_FADE_START_SEC = 60
+IDLE_FADE_FULL_SEC = 180
+IDLE_FADE_FLOOR = 0.20
+
 
 _BUTTON_STYLE = """
 QPushButton {
@@ -311,7 +318,11 @@ class HoverWindow(QWidget):
         init_w = DEFAULT_SIZE.width() * init_pct // 100
         init_h = DEFAULT_SIZE.height() * init_pct // 100
         self.resize(init_w, init_h)
-        self.setWindowOpacity(max(OPACITY_MIN, min(OPACITY_MAX, self.settings.opacity_pct)) / 100.0)
+        # Effective opacity = settings.opacity_pct × idle-fade fraction. Set on
+        # every change to either input via _apply_window_opacity().
+        self._idle_fade_frac = 1.0
+        self._hidden_for_fullscreen = False
+        self._apply_window_opacity()
 
         self._drag_offset: Optional[QPoint] = None
 
@@ -476,6 +487,9 @@ class HoverWindow(QWidget):
             self._toggle_visible()
 
     def _toggle_visible(self) -> None:
+        # Any explicit user toggle defeats the fullscreen auto-hide bookkeeping
+        # so we don't overwrite their choice when fullscreen ends.
+        self._hidden_for_fullscreen = False
         if self.isVisible():
             self.hide()
         else:
@@ -594,9 +608,47 @@ class HoverWindow(QWidget):
         return True
 
     def _on_opacity(self, v: int) -> None:
-        self.setWindowOpacity(v / 100.0)
         self.settings.opacity_pct = v
+        self._apply_window_opacity()
         self._persist_settings()
+
+    def _apply_window_opacity(self) -> None:
+        target = max(OPACITY_MIN, min(OPACITY_MAX, self.settings.opacity_pct)) / 100.0
+        self.setWindowOpacity(target * self._idle_fade_frac)
+
+    def apply_idle_fade(self, idle_sec: float) -> None:
+        """Update the idle-fade fraction from a measured idle duration."""
+        if not self.settings.idle_fade_enabled or idle_sec <= IDLE_FADE_START_SEC:
+            frac = 1.0
+        elif idle_sec >= IDLE_FADE_FULL_SEC:
+            frac = IDLE_FADE_FLOOR
+        else:
+            t = (idle_sec - IDLE_FADE_START_SEC) / (IDLE_FADE_FULL_SEC - IDLE_FADE_START_SEC)
+            frac = 1.0 - (1.0 - IDLE_FADE_FLOOR) * t
+        # Quantize to ~1% steps so we don't repaint every frame.
+        if abs(frac - self._idle_fade_frac) < 0.01:
+            return
+        self._idle_fade_frac = frac
+        self._apply_window_opacity()
+
+    def apply_fullscreen_autohide(self, fullscreen_active: bool) -> None:
+        """Hide to tray on fullscreen detect; restore only if WE caused the hide."""
+        if not self.settings.fullscreen_autohide_enabled:
+            # If a previous fullscreen hide is still in effect when the user
+            # disabled the feature, undo it on the next non-fullscreen tick.
+            if self._hidden_for_fullscreen and not fullscreen_active:
+                self._hidden_for_fullscreen = False
+                if not self.isVisible():
+                    self.show()
+            return
+        if fullscreen_active:
+            if self.isVisible():
+                self.hide()
+                self._hidden_for_fullscreen = True
+        elif self._hidden_for_fullscreen:
+            self._hidden_for_fullscreen = False
+            if not self.isVisible():
+                self.show()
 
     def _open_opacity_popup(self) -> None:
         if self._opacity_popup is not None and self._opacity_popup.isVisible():
@@ -617,6 +669,7 @@ class HoverWindow(QWidget):
             self.on_open_diary()
 
     def _hide_to_tray(self) -> None:
+        self._hidden_for_fullscreen = False
         if self.tray is not None:
             self.hide()
         else:
