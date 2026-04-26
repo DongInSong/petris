@@ -308,7 +308,10 @@ class HoverWindow(QWidget):
         )
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_NoSystemBackground, True)
-        self.setStyleSheet("background: transparent;")
+        # Scope to the window class — an unscoped `background: transparent`
+        # cascades to descendants (including QMenu popups parented to child
+        # buttons), which renders menu items invisible against the desktop.
+        self.setStyleSheet("HoverWindow { background: transparent; }")
         self.setAutoFillBackground(False)
         self.setWindowTitle("Petris")
         icon_path = _icon_path()
@@ -354,11 +357,15 @@ class HoverWindow(QWidget):
     # ---- side bar ---------------------------------------------------------
     def _build_title_bar(self) -> QWidget:
         bar = QWidget(self)
+        bar.setObjectName("sideBar")
         bar.setFixedWidth(SIDE_BAR_W)
         bar.setMaximumHeight(SIDE_BAR_H)
         bar.setAttribute(Qt.WA_TranslucentBackground, True)
         bar.setAttribute(Qt.WA_NoSystemBackground, True)
-        bar.setStyleSheet("background: transparent;")
+        # Scope by object name — an unscoped rule cascades into descendants,
+        # which would re-leak transparency into popup menus parented to the
+        # buttons inside this bar.
+        bar.setStyleSheet("QWidget#sideBar { background: transparent; }")
         vl = QVBoxLayout(bar)
         vl.setContentsMargins(3, 3, 3, 3)
         vl.setSpacing(2)
