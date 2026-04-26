@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.1 — 2026-04-26
+
+- Fix popup menus (scale `%` right-click, tray) rendering invisible
+  black-on-black text. The window and sidebar's `background: transparent`
+  rules were unscoped and cascaded into descendant menu popups; both are
+  now scoped to their owning widgets.
+- Redesign the diary dialog: compact dark layout with summary cards
+  (total / best day / play time / days), segmented sort toggle, podium
+  colors for the top 3 in score view.
+- Split the README into English (`README.md`) and Korean (`README.ko.md`)
+  with a top-of-page language switcher.
+
 ## 1.0.0 — 2026-04-21
 
 First public release.
