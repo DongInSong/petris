@@ -357,6 +357,11 @@ class App:
             self.game.move(-1)
         elif action == 'right':
             self.game.move(1)
+        elif action == 'soft_drop':
+            # T-spin entries need the piece grounded before the final rotation
+            # so the SRS kick seats it into the slot. Drop in one tick.
+            while self.game.soft_drop():
+                pass
         elif action == 'hold':
             self.game.swap_hold()
             self._current_plan = None
