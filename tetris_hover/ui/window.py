@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .. import autostart
 from ..core.game import Game
 from ..settings import Settings
 from .board_view import BoardView
@@ -477,6 +478,32 @@ class HoverWindow(QWidget):
         act_reset.triggered.connect(self._reset_size)
         menu.addAction(act_reset)
 
+        # Boot-time autostart. Reconcile saved flag with the actual registry
+        # state — the user could've cleared the Run key from msconfig/Task
+        # Manager between sessions, and we want the checkbox to tell the truth.
+        self._act_autostart = QAction("start with Windows", menu)
+        self._act_autostart.setCheckable(True)
+        if autostart.is_supported():
+            actual = autostart.is_enabled()
+            self._act_autostart.setChecked(actual)
+            if actual != self.settings.autostart_enabled:
+                self.settings.autostart_enabled = actual
+                self._persist_settings()
+            self._act_autostart.setToolTip(
+                "registers an elevated logon task — UAC will prompt"
+            )
+            self._act_autostart.triggered.connect(self._toggle_autostart)
+        else:
+            self._act_autostart.setEnabled(False)
+            self._act_autostart.setChecked(False)
+            if sys.platform != 'win32':
+                self._act_autostart.setToolTip("only available on Windows")
+            else:
+                self._act_autostart.setToolTip(
+                    "only available in the packaged Petris.exe — dev runs can't register a stable path"
+                )
+        menu.addAction(self._act_autostart)
+
         menu.addSeparator()
         act_quit = QAction("quit", menu)
         act_quit.triggered.connect(self._power_off)
@@ -534,6 +561,16 @@ class HoverWindow(QWidget):
             idx = -1
         nxt = THEME_ORDER[(idx + 1) % len(THEME_ORDER)]
         self._set_theme(get_theme(nxt))
+
+    def _toggle_autostart(self, checked: bool) -> None:
+        ok = autostart.enable() if checked else autostart.disable()
+        if not ok:
+            # Registry write refused — revert the checkbox so it doesn't
+            # misrepresent the actual state.
+            self._act_autostart.setChecked(not checked)
+            return
+        self.settings.autostart_enabled = checked
+        self._persist_settings()
 
     def _set_ai_mode(self, mode: str) -> None:
         if mode not in ('calm', 'tetris', 'tspin'):

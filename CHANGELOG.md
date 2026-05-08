@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.2 — 2026-05-08
+
+- Add **Start with Windows** toggle to the tray menu. Registers a Task
+  Scheduler logon trigger with `HighestAvailable` run level so an elevated
+  launch survives reboots (the simpler HKCU Run key would lose elevation
+  and break keystroke capture from UAC-elevated apps via UIPI). Toggling
+  prompts UAC; querying state does not. Available only in the packaged
+  exe — disabled with a tooltip in dev runs.
+
 ## 1.0.1 — 2026-04-26
 
 - Fix popup menus (scale `%` right-click, tray) rendering invisible

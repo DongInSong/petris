@@ -35,6 +35,9 @@ class Settings:
     idle_fade_enabled: bool = True
     # Hide to tray while another app is in D3D fullscreen / presentation mode.
     fullscreen_autohide_enabled: bool = True
+    # Launch with Windows on user login. Mirrors the HKCU Run key — kept here
+    # only so the tray checkbox reflects state without a registry round-trip.
+    autostart_enabled: bool = False
 
     @classmethod
     def load(cls) -> "Settings":
