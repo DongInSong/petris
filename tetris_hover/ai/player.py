@@ -56,16 +56,41 @@ WEIGHTS_CALM = Weights(
 )
 
 # Tetris-chaser: exponential reward for bigger clears + right-edge well.
+# wells penalty applies to columns 0-8 only (see _score) — the right-edge
+# well is the one well we *want*, but a second well in the middle is junk.
 WEIGHTS_TETRIS = Weights(
     landing=-2.5,
-    rows=1.0,
+    rows=1.5,             # tetris = 1.5×4³ = 96 — must clearly beat the ~45
+                          # right-well bonus forfeited by cashing in the well
     row_trans=-3.0,
     col_trans=-9.0,
     holes=-9.5,
-    wells=0.0,            # allow an arbitrarily deep well (no penalty)
-    row_exp=3.0,          # tetris = 4^3 = 64× single
+    wells=-2.0,
+    row_exp=3.0,
     right_well_bonus=9.0, # strongly reward depth on the rightmost column
 )
+
+# Depth past this earns no extra right-well shaping bonus: a tetris only needs
+# 4 rows, and each extra well row already costs 2 row-transitions to maintain.
+RIGHT_WELL_CAP = 5
+
+
+def _ready_rows(grid, heights) -> int:
+    """Rows the banked I would clear right now: counted upward from the top
+    of column 9's stack, consecutive rows with columns 0-8 filled and the
+    well cell empty. This — not min-column depth — is the actual tetris
+    payout condition, so it's what the right-well bonus pays on."""
+    h = len(grid)
+    y = h - 1 - heights[9]
+    ready = 0
+    while y >= 0 and ready < 4:
+        row = grid[y]
+        if row[9] is None and all(row[x] is not None for x in range(9)):
+            ready += 1
+            y -= 1
+        else:
+            break
+    return ready
 
 # T-spin seeker: actively scores T-spin entries via SRS-kick rotation into
 # 3-corner pockets, and rewards leaving open T-slots on the stack so future
@@ -102,16 +127,17 @@ W_COL_TRANS = WEIGHTS_CALM.col_trans
 W_HOLES = WEIGHTS_CALM.holes
 W_WELLS = WEIGHTS_CALM.wells
 
-# T-spin score table. Indexed by (kind, lines_cleared). Mirrors guideline
-# scoring shape — values are relative; the AI weights them via tspin_bonus.
+# T-spin score table. Indexed by (kind, lines_cleared). Tracks the engine's
+# actual scoring table (core/scoring.py ÷ 10) so the planner's preferences
+# match what the game pays out; the AI weights them via tspin_bonus.
 TSPIN_SCORE_TABLE = {
-    ('mini', 0): 5,
-    ('mini', 1): 15,
-    ('mini', 2): 25,
-    ('full', 0): 30,
-    ('full', 1): 60,
+    ('mini', 0): 5,     # near-worthless, and it burns the T
+    ('mini', 1): 20,
+    ('mini', 2): 40,
+    ('full', 0): 40,    # T-spin zero pays 400 in-game — worth taking
+    ('full', 1): 80,
     ('full', 2): 120,   # T-spin double — the bread-and-butter
-    ('full', 3): 200,   # TST
+    ('full', 3): 160,   # TST
 }
 
 # SRS kicks whose y-offset is ±2 promote a mini T-spin to full (TST kick).
@@ -202,10 +228,19 @@ def _detect_t_spin_pose(grid, rot: int, x: int, y: int, last_kick: Tuple[int, in
     return 'mini'
 
 
-def _is_t_slot(grid, rot: int, cx: int, cy: int) -> bool:
-    """True if the cells the T would occupy at center (cx, cy) are empty AND
-    3 of the 4 corners are filled. Reachability is not verified — this is a
-    structural check used to reward leaving pockets open."""
+# A mini-shaped slot is worth keeping, but far less than a full-shaped one
+# (mini single pays 200 in-game vs 1200 for a T-spin double).
+MINI_SLOT_WEIGHT = 0.35
+
+_FRONT_SETS = {0: (0, 1), 1: (1, 3), 2: (2, 3), 3: (0, 2)}
+
+
+def _t_slot_kind(grid, rot: int, cx: int, cy: int) -> str:
+    """'' if no slot, else 'mini'/'full': the cells the T would occupy at
+    center (cx, cy) are empty AND 3 of the 4 corners are filled; 'full' when
+    both front corners are filled (same rule as the engine's detector).
+    Reachability is not verified — this is a structural check used to reward
+    leaving pockets open."""
     x = cx - 1
     y = cy - 1
     h = len(grid)
@@ -214,20 +249,25 @@ def _is_t_slot(grid, rot: int, cx: int, cy: int) -> bool:
         gx = x + dx
         gy = y + dy
         if gx < 0 or gx >= w or gy >= h:
-            return False
+            return ''
         if gy < 0:
             continue
         if grid[gy][gx] is not None:
-            return False
+            return ''
     corners = [
         (cx - 1, cy - 1), (cx + 1, cy - 1),
         (cx - 1, cy + 1), (cx + 1, cy + 1),
     ]
-    return sum(_corner_filled(grid, fx, fy) for fx, fy in corners) >= 3
+    filled = [_corner_filled(grid, fx, fy) for fx, fy in corners]
+    if sum(filled) < 3:
+        return ''
+    fa, fb = _FRONT_SETS[rot]
+    return 'full' if filled[fa] + filled[fb] == 2 else 'mini'
 
 
-def _count_t_slots(grid) -> int:
-    """Cap the count so a deeply pocked stack doesn't dominate the score.
+def _count_t_slots(grid) -> float:
+    """Weighted slot count: full-shaped slots count 1.0, mini-shaped 0.35.
+    Capped so a deeply pocked stack doesn't dominate the score.
     Only scans a window around the stack top — slots can't form in the empty
     region above or fully buried far below, so a full 24×10 sweep wastes time."""
     h = len(grid)
@@ -239,17 +279,22 @@ def _count_t_slots(grid) -> int:
             top = y
             break
     if top >= h - 1:
-        return 0  # empty board
+        return 0.0  # empty board
     y_min = max(1, top - 1)
     y_max = min(h - 1, top + 5)
-    seen = set()
+    total = 0.0
     for cy in range(y_min, y_max):
         for cx in range(1, w - 1):
+            best = 0.0
             for rot in range(4):
-                if _is_t_slot(grid, rot, cx, cy):
-                    seen.add((cx, cy))
+                kind = _t_slot_kind(grid, rot, cx, cy)
+                if kind == 'full':
+                    best = 1.0
                     break
-    return min(len(seen), 3)
+                if kind == 'mini':
+                    best = MINI_SLOT_WEIGHT
+            total += best
+    return min(total, 3.0)
 
 
 def _apply_piece(grid, kind: str, rot: int, x: int, y: int):
@@ -295,14 +340,19 @@ def _count_holes(grid, heights) -> int:
     return holes
 
 
-def _row_transitions(grid) -> int:
+def _row_transitions(grid, treat_last_filled: bool = False) -> int:
+    """treat_last_filled: count the last column as always filled. In tetris
+    mode the open right well would otherwise cost 2 transitions per row,
+    which silently *rewards* dumping blocks into the well (-3 × 2 = +6 per
+    cell dumped) — more than the well bonus can counter."""
     h = len(grid)
     w = len(grid[0])
+    last = w - 1
     t = 0
     for y in range(h):
         prev = True  # left wall = filled
         for x in range(w):
-            cur = grid[y][x] is not None
+            cur = grid[y][x] is not None or (treat_last_filled and x == last)
             if cur != prev:
                 t += 1
             prev = cur
@@ -328,10 +378,12 @@ def _col_transitions(grid) -> int:
     return t
 
 
-def _wells(grid, heights) -> int:
+def _wells(grid, heights, exclude_col: int = -1) -> int:
     w = len(heights)
     total = 0
     for x in range(w):
+        if x == exclude_col:
+            continue
         left = heights[x - 1] if x > 0 else heights[x]
         right = heights[x + 1] if x < w - 1 else heights[x]
         depth = min(left, right) - heights[x]
@@ -350,9 +402,12 @@ def _score(
 ) -> float:
     heights = _column_heights(grid)
     holes = _count_holes(grid, heights)
-    rowt = _row_transitions(grid)
+    rowt = _row_transitions(grid, treat_last_filled=w.right_well_bonus > 0)
     colt = _col_transitions(grid)
-    wells = _wells(grid, heights)
+    # In tetris mode the right-edge well is intentional — exempt it from the
+    # wells penalty so only *unwanted* wells (columns 0-8) are punished.
+    well_excl = len(heights) - 1 if w.right_well_bonus > 0 else -1
+    wells = _wells(grid, heights, exclude_col=well_excl)
     row_reward = w.rows * (rows_cleared ** w.row_exp) if rows_cleared > 0 else 0.0
     score = (
         w.landing * landing_y_from_bottom
@@ -363,10 +418,16 @@ def _score(
         + w.wells * wells
     )
     if w.right_well_bonus > 0:
+        # Pay full rate on tetris-ready rows, plus a smaller shaping term on
+        # raw well depth so progress counts even before a row completes.
+        score += w.right_well_bonus * _ready_rows(grid, heights)
         other_min = min(heights[:9])
         depth = other_min - heights[9]
         if depth > 0:
-            score += w.right_well_bonus * depth
+            score += 0.4 * w.right_well_bonus * min(depth, RIGHT_WELL_CAP)
+        # Blocks dumped into the well column poison future tetrises until
+        # they're dug back out — charge for each one directly.
+        score -= 0.6 * w.right_well_bonus * heights[9]
     if w.tspin_bonus > 0 and t_spin:
         score += w.tspin_bonus * TSPIN_SCORE_TABLE.get((t_spin, rows_cleared), 0)
     if w.tslot_preserve > 0:
@@ -417,6 +478,9 @@ class Plan:
     x: int
     use_hold: bool
     score: float
+    # Lines the simulated placement cleared (set for T-spin entries; used to
+    # judge whether an immediate spin is worth spending the T on).
+    cleared: int = 0
     # T-spin entry fields (only meaningful when is_tspin=True). The piece
     # rotates from approach_rot at approach_x, soft-drops, then a single
     # rotation in `tspin_direction` snaps it into the slot via SRS kick.
@@ -431,7 +495,7 @@ def _best_lookahead_t_bonus(grid, w: Weights) -> float:
     """Best T-spin bonus achievable by placing a T on `grid`. Returns 0 when
     no structural slot exists — short-circuits the 80-candidate enumeration
     in the common "no slot here" case, which is most placements."""
-    if _count_t_slots(grid) == 0:
+    if _count_t_slots(grid) <= 0.0:
         return 0.0
     best = 0.0
     for approach_rot in range(4):
@@ -442,11 +506,9 @@ def _best_lookahead_t_bonus(grid, w: Weights) -> float:
             for direction in (1, -1):
                 cand = _evaluate_tspin_entry(grid, approach_rot, approach_x, direction, w)
                 if cand and cand.tspin_kind:
-                    rows = 0
-                    sim = [row[:] for row in grid]
-                    _apply_piece(sim, 'T', cand.rot, cand.x, _drop_y(grid, 'T', cand.rot, cand.x) or 0)
-                    rows = sum(1 for r in sim if all(c is not None for c in r))
-                    bonus = w.tspin_bonus * TSPIN_SCORE_TABLE.get((cand.tspin_kind, rows), 0)
+                    bonus = w.tspin_bonus * TSPIN_SCORE_TABLE.get(
+                        (cand.tspin_kind, cand.cleared), 0
+                    )
                     if bonus > best:
                         best = bonus
     return best
@@ -458,10 +520,9 @@ def _evaluate_placement(
     rot: int,
     x: int,
     w: Weights,
-    next_t_lookahead: bool = False,
     t_factor: float = 1.0,
-    slots_before: int = 0,
-) -> Optional[Tuple[float, int]]:
+    slots_before: float = 0.0,
+) -> Optional[Tuple[float, int, int]]:
     y = _drop_y(base_grid, kind, rot, x)
     if y is None:
         return None
@@ -489,7 +550,7 @@ def _evaluate_placement(
             # T is close enough that the projection actually pays off.
             if t_factor >= 0.55:
                 score += 0.5 * t_factor * _best_lookahead_t_bonus(grid, w)
-    return score, y
+    return score, y, cleared
 
 
 def _evaluate_tspin_entry(
@@ -531,6 +592,7 @@ def _evaluate_tspin_entry(
             x=final_x,
             use_hold=False,
             score=score,
+            cleared=cleared,
             is_tspin=True,
             tspin_kind=t_spin,
             approach_rot=approach_rot,
@@ -544,22 +606,21 @@ def _best_placement(
     base_grid,
     kind: str,
     w: Weights,
-    next_t_lookahead: bool = False,
     t_factor: float = 1.0,
 ) -> Optional[Plan]:
     best: Optional[Plan] = None
-    slots_before = _count_t_slots(base_grid) if (kind != 'T' and w.tspin_bonus > 0 and t_factor > 0.0) else 0
+    slots_before = _count_t_slots(base_grid) if (kind != 'T' and w.tspin_bonus > 0 and t_factor > 0.0) else 0.0
     for rot in range(4):
         minos = SHAPES[kind][rot]
         min_dx = min(m[0] for m in minos)
         max_dx = max(m[0] for m in minos)
         for x in range(-min_dx, BOARD_W - max_dx):
-            r = _evaluate_placement(base_grid, kind, rot, x, w, next_t_lookahead, t_factor, slots_before)
+            r = _evaluate_placement(base_grid, kind, rot, x, w, t_factor, slots_before)
             if r is None:
                 continue
-            score, _y = r
+            score, _y, cleared = r
             if best is None or score > best.score:
-                best = Plan(rot=rot, x=x, use_hold=False, score=score)
+                best = Plan(rot=rot, x=x, use_hold=False, score=score, cleared=cleared)
     if kind == 'T' and w.tspin_bonus > 0:
         for approach_rot in range(4):
             minos = SHAPES['T'][approach_rot]
@@ -577,24 +638,38 @@ def _best_placement(
     return best
 
 
+# Below this danger level the AI abandons setup play entirely and falls back
+# to pure-survival weights. Corresponds to a stack ≥ ~14 rows tall.
+PANIC_DANGER = 0.35
+
+
 def plan(game: Game, mode: str = 'calm') -> Optional[Plan]:
     if game.piece is None:
         return None
     w = MODES.get(mode, WEIGHTS_CALM)
     grid = game.board.snapshot()
 
+    danger = _danger_factor(grid)
+    if danger <= PANIC_DANGER and (w.tspin_bonus > 0 or w.right_well_bonus > 0):
+        # Panic: stack is near the ceiling. Drop all setup play — well
+        # discipline, slot preservation, wasted-T penalties — and dig with
+        # survival weights until there's headroom again.
+        w = WEIGHTS_CALM
+
     if w.tspin_bonus > 0:
         # Multiplied factor: T proximity × stack-danger gating. When stack is
         # high, slot-preservation rewards collapse to keep the AI alive.
-        t_factor = _t_proximity_factor(game) * _danger_factor(grid)
+        t_factor = _t_proximity_factor(game) * danger
     else:
         t_factor = 0.0
 
-    # Tspin mode: when the *current* piece is T and no T-spin entry exists on
-    # the current board, save it for later by holding instead of plopping it
-    # down as a normal piece. This is the single biggest behavioral fix —
-    # without it the AI burns Ts on flat boards and never has one in reserve
-    # when a slot finally appears.
+    # Tspin mode: when the *current* piece is T and no worthwhile T-spin
+    # entry exists on the current board, save it for later by holding instead
+    # of plopping it down as a normal piece. "Worthwhile" = any full spin, or
+    # a mini that clears a line — a mini T-spin zero pays ~nothing and burns
+    # the T, so we hold through those too. This is the single biggest
+    # behavioral fix — without it the AI burns Ts on flat boards and never
+    # has one in reserve when a slot finally appears.
     if (
         w.tspin_bonus > 0
         and game.piece.kind == 'T'
@@ -602,33 +677,53 @@ def plan(game: Game, mode: str = 'calm') -> Optional[Plan]:
         and game.hold != 'T'
     ):
         immediate = _best_tspin_only(grid, w)
-        if immediate is None:
+        worthwhile = immediate is not None and (
+            immediate.tspin_kind == 'full' or immediate.cleared >= 1
+        )
+        if not worthwhile:
             hold_kind = game.hold if game.hold is not None else game.bag.peek(1)[0]
             # After hold-swap, the held T is in reserve → t_factor=1.0.
-            alt = _best_placement(grid, hold_kind, w, next_t_lookahead=True, t_factor=1.0)
+            alt = _best_placement(grid, hold_kind, w, t_factor=1.0)
             if alt is not None:
                 alt.use_hold = True
                 return alt
 
-    # T-anticipation lookahead: enable for non-T pieces whenever a T is
-    # nearby — either currently in hold, or within the next 2 bag pieces.
-    # Without including the held T, the AI ignores T-setup considerations
-    # the moment it parks a T in hold, which defeats the whole hold logic.
-    next_t = False
-    if w.tspin_bonus > 0 and game.piece.kind != 'T':
-        upcoming = list(game.bag.peek(2))
-        if game.hold == 'T':
-            upcoming.append('T')
-        next_t = 'T' in upcoming
-    cur = _best_placement(grid, game.piece.kind, w, next_t_lookahead=next_t, t_factor=t_factor)
+    # Tetris mode: manage the I piece around the right-edge well. The test
+    # for both banking and firing is the same: can an I clear 4 lines on this
+    # board right now?
+    if w.right_well_bonus > 0 and not game.hold_used:
+        if game.piece.kind == 'I' and game.hold != 'I':
+            # Bank the I unless it can pay out a tetris immediately —
+            # otherwise the eval happily spends it as flat filler and the
+            # well starves.
+            best_i = _best_placement(grid, 'I', w)
+            if best_i is None or best_i.cleared < 4:
+                hold_kind = game.hold if game.hold is not None else game.bag.peek(1)[0]
+                alt = _best_placement(grid, hold_kind, w)
+                if alt is not None:
+                    alt.use_hold = True
+                    return alt
+            # else: fall through — the generic plan below picks the tetris.
+        elif game.hold == 'I' and game.piece.kind != 'I':
+            # Fire the banked I as soon as it can clear a tetris. Without
+            # this the generic hold compare below (with its anti-waste
+            # margin) keeps the I locked up while the well sits ready.
+            alt = _best_placement(grid, 'I', w)
+            if alt is not None and alt.cleared >= 4:
+                alt.use_hold = True
+                return alt
+
+    cur = _best_placement(grid, game.piece.kind, w, t_factor=t_factor)
 
     if not game.hold_used:
         hold_kind = game.hold if game.hold is not None else game.bag.peek(1)[0]
-        # If we'd hold-swap, the "next" piece becomes whatever is currently
-        # in play (current_kind) — recompute lookahead for that frame.
-        alt_next_t = (game.piece.kind == 'T') and (hold_kind != 'T')
-        alt = _best_placement(grid, hold_kind, w, next_t_lookahead=alt_next_t, t_factor=t_factor)
-        if alt is not None and (cur is None or alt.score > cur.score + 5.0):
+        alt = _best_placement(grid, hold_kind, w, t_factor=t_factor)
+        # A banked I is for the tetris — only release it for a 4-line clear
+        # (or under a much larger margin, e.g. the stack badly needs an I).
+        margin = 5.0
+        if w.right_well_bonus > 0 and hold_kind == 'I' and (alt is None or alt.cleared < 4):
+            margin = 60.0
+        if alt is not None and (cur is None or alt.score > cur.score + margin):
             alt.use_hold = True
             return alt
     return cur

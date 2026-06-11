@@ -30,6 +30,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 from tetris_hover.core.game import Game, ClearEvent, TopOutEvent, LOCK_DELAY_MS
+from tetris_hover.core.scoring import Session
 from tetris_hover.ai.player import plan, plan_to_actions, Plan
 
 # Mirror the timing constants from tetris_hover.app so this is faithful.
@@ -78,6 +79,7 @@ def run_game(seed: int, mode: str, max_pieces: int, mult: float, verbose: bool):
       (piece_kind, planned_tspin_kind, planned_use_hold, actual_tspin_kind, lines_cleared)
     """
     game = Game(seed=seed)
+    session = Session()
     records = []
     deaths = 0
     pieces_processed = 0
@@ -151,11 +153,14 @@ def run_game(seed: int, mode: str, max_pieces: int, mult: float, verbose: bool):
         for evt in game.drain_events():
             if isinstance(evt, TopOutEvent):
                 deaths += 1
+                session.on_top_out()
                 current_plan = None
                 action_queue = []
                 last_planned = None
                 continue
             if isinstance(evt, ClearEvent):
+                session.on_piece_locked()
+                session.on_clear(evt, 1.0)
                 # Record what we planned vs what happened.
                 planned_tspin = ''
                 planned_hold = False
@@ -181,10 +186,10 @@ def run_game(seed: int, mode: str, max_pieces: int, mult: float, verbose: bool):
 
         sim_ms += dt
 
-    return records, deaths
+    return records, deaths, session.raw_score
 
 
-def summarize(label: str, all_records: list, total_games: int, total_deaths: int = 0):
+def summarize(label: str, all_records: list, total_games: int, total_deaths: int = 0, total_score: float = 0.0):
     pieces = len(all_records)
     full_planned = sum(1 for r in all_records if r[1] == 'full')
     mini_planned = sum(1 for r in all_records if r[1] == 'mini')
@@ -195,16 +200,20 @@ def summarize(label: str, all_records: list, total_games: int, total_deaths: int
     full_planned_no_spin = sum(1 for r in all_records if r[1] == 'full' and r[3] == '')
     mini_planned_no_spin = sum(1 for r in all_records if r[1] == 'mini' and r[3] == '')
     line_clears = sum(1 for r in all_records if r[4] > 0)
+    by_lines = {n: sum(1 for r in all_records if r[4] == n) for n in (1, 2, 3, 4)}
 
     def pct(num, denom):
         return f"{100*num/denom:.1f}%" if denom else "—"
 
     deaths_per_100 = (100 * total_deaths / pieces) if pieces else 0.0
+    score_per_100 = (100 * total_score / pieces) if pieces else 0.0
     print(f"\n=== {label} ===")
     print(f"  games:                  {total_games}")
     print(f"  pieces locked:          {pieces}")
     print(f"  top-outs:               {total_deaths} ({deaths_per_100:.1f} per 100 pieces)")
-    print(f"  line clears:            {line_clears}")
+    print(f"  raw score:              {total_score:.0f} ({score_per_100:.0f} per 100 pieces)")
+    print(f"  line clears:            {line_clears} "
+          f"(1×{by_lines[1]} 2×{by_lines[2]} 3×{by_lines[3]} 4×{by_lines[4]})")
     print(f"  T-spin plans (full):    {full_planned}")
     print(f"  T-spin plans (mini):    {mini_planned}")
     print(f"  T-spin actual (full):   {full_actual}")
@@ -231,14 +240,16 @@ def main():
     t0 = time.perf_counter()
     all_records = []
     total_deaths = 0
+    total_score = 0.0
     for s in seeds:
-        recs, d = run_game(s, args.mode, args.pieces, args.multiplier, args.verbose)
+        recs, d, score = run_game(s, args.mode, args.pieces, args.multiplier, args.verbose)
         all_records.extend(recs)
         total_deaths += d
+        total_score += score
     elapsed = time.perf_counter() - t0
     print(f"  ran in {elapsed:.1f}s ({len(all_records)/max(elapsed,1e-9):.0f} pieces/s)")
 
-    summarize(f"mult={args.multiplier}", all_records, len(seeds), total_deaths)
+    summarize(f"mult={args.multiplier}", all_records, len(seeds), total_deaths, total_score)
 
 
 if __name__ == '__main__':

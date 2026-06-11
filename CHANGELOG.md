@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.0.3 — 2026-06-11
+
+- Overhaul AI mode logic. Measured over 10 games × 300 pieces (raw
+  score per 100 pieces): **tetris** 5,430 → 8,057 (+48%, 4-line clears
+  19 → 177), **tspin** 7,672 → 10,785 (+41%, full T-spins 86 → 201);
+  calm unchanged. Zero top-outs in all modes at 1×–6× speed.
+  - tetris: fix a scoring distortion where row-transition penalties paid
+    the AI +6 to dump blocks into the well; reward tetris-ready rows
+    (cols 0–8 full, well empty) instead of min-column depth; bank the I
+    piece in hold and fire it the moment a 4-line clear is available;
+    penalize interior wells and well-column garbage.
+  - tspin: hold the T through worthless mini T-spin zeros; weight
+    full-shaped T-slots over mini-shaped ones when preserving setups;
+    align the planner's T-spin score table with the engine's actual
+    payouts; fix line-count simulation for kicked entries.
+  - all modes: panic fallback to survival weights when the stack nears
+    the ceiling.
+- `scripts/tspin_test.py` now reports raw score and the 1/2/3/4-line
+  clear distribution.
+
 ## 1.0.2 — 2026-05-08
 
 - Add **Start with Windows** toggle to the tray menu. Registers a Task

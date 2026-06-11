@@ -26,8 +26,9 @@ class Settings:
     theme: str = "ambient"  # 'ambient' | 'vivid'
     sidebar_side: str = "left"  # 'left' | 'right'
     hard_drop_threshold: float = 5.0
-    # AI playstyle: 'calm' (steady singles), 'tetris' (builds for big clears),
-    # 'tspin' (tolerates messy stacks — occasional T-spins via luck).
+    # AI playstyle: 'calm' (steady singles), 'tetris' (banks the I piece and
+    # fires 4-line clears from a right-edge well), 'tspin' (builds T-slots
+    # and actively hunts T-spin doubles).
     ai_mode: str = "tetris"
     # Percent of today's accumulated score deducted on each top-out.
     death_penalty_pct: float = 10.0

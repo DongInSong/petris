@@ -456,11 +456,10 @@ class HoverWindow(QWidget):
         ai_group = QActionGroup(ai_menu)
         ai_group.setExclusive(True)
         self._ai_actions = {}
-        # Death rates measured empirically over 3000 pieces per mode.
         for mode_key, mode_label in (
-            ('calm', 'calm — singles · death ~1.5%/piece'),
-            ('tetris', 'tetris — big clears · death ~1.2%/piece'),
-            ('tspin', 't-spin — messy · death ~0.5%/piece'),
+            ('calm', 'calm — steady singles'),
+            ('tetris', 'tetris — banks I, fires 4-line wells'),
+            ('tspin', 't-spin — hunts T-spin doubles'),
         ):
             act = QAction(mode_label, ai_menu)
             act.setCheckable(True)
