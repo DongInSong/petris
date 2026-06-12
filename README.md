@@ -6,6 +6,8 @@ A little tetris that soothes a heart worn down by vibe coding.
 
 It plays itself in the corner of your screen. Typing speeds up the blocks and scores points. Daily totals go into a diary.
 
+<p align="center"><img src="screenshot.png" width="200" alt="Petris running in the corner of the screen"></p>
+
 Windows only.
 
 ## Install
