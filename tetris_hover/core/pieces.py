@@ -83,15 +83,17 @@ def get_kicks(kind: str, from_rot: int, to_rot: int) -> List[Mino]:
     return table[(from_rot, to_rot)]
 
 
-# Standard guideline colors (vivid theme)
+# Candy-arcade palette (vivid theme): guideline hues, pulled off the pure
+# 240-primaries toward richer sweets — these sit under a gloss gradient, so
+# slightly deeper bases keep the candy from washing out.
 COLORS_VIVID: Dict[str, Tuple[int, int, int]] = {
-    'I': (0, 240, 240),
-    'O': (240, 240, 0),
-    'T': (160, 0, 240),
-    'S': (0, 240, 0),
-    'Z': (240, 0, 0),
-    'J': (0, 0, 240),
-    'L': (240, 160, 0),
+    'I': (0, 196, 255),     # bubblegum cyan
+    'O': (255, 204, 0),     # lemon drop
+    'T': (186, 64, 255),    # grape
+    'S': (54, 214, 80),     # lime candy
+    'Z': (255, 70, 92),     # strawberry
+    'J': (64, 110, 255),    # blue raspberry
+    'L': (255, 144, 32),    # orange cream
 }
 
 # Low-saturation pastel (ambient theme)
@@ -115,6 +117,30 @@ COLORS_NEON: Dict[str, Tuple[int, int, int]] = {
     'Z': (255, 60, 100),
     'J': (80, 130, 255),
     'L': (255, 130, 30),
+}
+
+# Frosted-ice palette (aurora theme): cool and luminous but with enough
+# body that the translucent glass doesn't wash out over light wallpapers.
+COLORS_AURORA: Dict[str, Tuple[int, int, int]] = {
+    'I': (88, 196, 240),    # glacier cyan
+    'O': (235, 210, 130),   # low-sun gold
+    'T': (168, 122, 244),   # auroral violet
+    'S': (104, 224, 164),   # polar mint
+    'Z': (244, 116, 158),   # arctic rose
+    'J': (116, 148, 246),   # twilight periwinkle
+    'L': (246, 166, 104),   # horizon peach
+}
+
+# Game Boy DMG palette (retro theme): every piece is LCD ink. Three shades
+# only so the board stays authentically monochrome; pieces read by shape.
+COLORS_RETRO: Dict[str, Tuple[int, int, int]] = {
+    'I': (15, 56, 15),      # darkest ink
+    'O': (15, 56, 15),
+    'T': (15, 56, 15),
+    'S': (48, 98, 48),      # mid ink
+    'Z': (48, 98, 48),
+    'J': (27, 76, 27),      # deep ink
+    'L': (27, 76, 27),
 }
 
 BOARD_W = 10

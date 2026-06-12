@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.4 — 2026-06-12
+
+- Two new themes: **aurora** (frosted-glass blocks, drifting orb
+  particles) and **retro** (Game Boy DMG: pea-green LCD panel,
+  three-shade monochrome blocks).
+- Visual overhaul of existing themes. Each theme now picks a block
+  style (bevel / candy / neon / glass / lcd), ghost style (fill /
+  outline), and particle style (square / confetti / spark / orb):
+  - vivid: glossy rounded candy blocks with a deeper arcade palette,
+    confetti bursts, hollow-outline ghost.
+  - neon: rounded bloom instead of stacked rect halos, white tube core,
+    velocity-aligned spark streaks.
+- `scripts/theme_preview.py` renders every theme over dark and light
+  backdrops to PNGs for eyeballing changes without launching the app.
+
 ## 1.0.3 — 2026-06-11
 
 - Overhaul AI mode logic. Measured over 10 games × 300 pieces (raw

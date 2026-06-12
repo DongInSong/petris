@@ -47,9 +47,10 @@ from .. import autostart
 from ..core.game import Game
 from ..settings import Settings
 from .board_view import BoardView
-from .themes import AMBIENT, NEON, ORDER as THEME_ORDER, Theme, VIVID, get as get_theme
+from .themes import AMBIENT, ORDER as THEME_ORDER, Theme, get as get_theme
 
-THEME_GLYPHS = {'ambient': '○', 'vivid': '●', 'neon': '◆'}
+THEME_GLYPHS = {'ambient': '○', 'vivid': '●', 'neon': '◆',
+                'aurora': '❆', 'retro': '▦'}
 
 # Side bar is a fixed-size overlay on the right edge; its dimensions don't
 # change with UI scale, so buttons never squish.
@@ -440,9 +441,9 @@ class HoverWindow(QWidget):
         menu.addSeparator()
 
         theme_menu = menu.addMenu("theme")
-        for label, theme_obj in (("ambient", AMBIENT), ("vivid", VIVID), ("neon", NEON)):
-            act = QAction(label, theme_menu)
-            act.triggered.connect(lambda _=False, t=theme_obj: self._set_theme(t))
+        for name in THEME_ORDER:
+            act = QAction(name, theme_menu)
+            act.triggered.connect(lambda _=False, t=get_theme(name): self._set_theme(t))
             theme_menu.addAction(act)
 
         snap_menu = menu.addMenu("snap to")

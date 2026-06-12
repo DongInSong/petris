@@ -2,8 +2,8 @@
 import time
 from typing import List
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QFont, QPainter
+from PySide6.QtCore import Qt, QRectF
+from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QWidget
 
 from ..core.game import Game, Piece
@@ -150,9 +150,11 @@ class BoardView(QWidget):
         cell = self._cell_size()
         bx, by, bw, bh = self._board_rect(cell)
 
-        # Fully transparent playfield — blocks float against whatever is behind
-        # the widget (desktop, taskbar). No fill, no border. Neon's per-block
-        # shadow gives local contrast without painting a panel.
+        # Most themes paint no playfield at all — blocks float against
+        # whatever is behind the widget (desktop, taskbar). Retro is the
+        # exception: it paints the pale LCD screen the blocks live on.
+        if self.theme.panel:
+            self._draw_panel(painter, bx, by, bw, bh, cell)
 
         self._draw_stack(painter, bx, by, cell)
         if self.game.piece is not None:
@@ -282,11 +284,25 @@ class BoardView(QWidget):
     def _draw_cell(self, p: QPainter, x: int, y: int, cell: int, kind: str, alpha: int = 255, ghost: bool = False) -> None:
         rgb = self.theme.block_colors[kind]
         if ghost:
-            p.fillRect(x, y, cell, cell, QColor(rgb[0], rgb[1], rgb[2], alpha))
+            if self.theme.ghost_style == 'outline':
+                self._draw_ghost_outline(p, x, y, cell, rgb, alpha)
+            else:
+                p.fillRect(x, y, cell, cell, QColor(rgb[0], rgb[1], rgb[2], alpha))
             return
-        if self.theme.block_glow:
+        style = self.theme.block_style
+        if style == 'candy':
+            self._draw_cell_candy(p, x, y, cell, rgb, alpha)
+        elif style == 'neon':
             self._draw_cell_neon(p, x, y, cell, rgb, alpha)
-            return
+        elif style == 'glass':
+            self._draw_cell_glass(p, x, y, cell, rgb, alpha)
+        elif style == 'lcd':
+            self._draw_cell_lcd(p, x, y, cell, rgb, alpha)
+        else:
+            self._draw_cell_bevel(p, x, y, cell, rgb, alpha)
+
+    def _draw_cell_bevel(self, p: QPainter, x: int, y: int, cell: int,
+                         rgb: tuple, alpha: int) -> None:
         base = QColor(rgb[0], rgb[1], rgb[2], alpha)
         p.fillRect(x, y, cell, cell, base)
         # Highlight edge (top + left)
@@ -298,49 +314,219 @@ class BoardView(QWidget):
         p.fillRect(x, y + cell - 2, cell, 2, sh)
         p.fillRect(x + cell - 2, y, 2, cell, sh)
 
+    def _draw_ghost_outline(self, p: QPainter, x: int, y: int, cell: int,
+                            rgb: tuple, alpha: int) -> None:
+        """Hollow frame ghost — reads as a target slot, not a faded block.
+        Drawn per mino, so shared edges between minos double up slightly;
+        that grid-like seam is fine (it's how most modern clients render)."""
+        t = 2 if cell >= 12 else 1
+        # Dark underlay one pixel proud of the colored frame, so the ghost
+        # stays visible when the piece color matches the wallpaper.
+        d = QColor(0, 0, 0, 110 * alpha // 255)
+        p.fillRect(x, y, cell, t + 2, d)
+        p.fillRect(x, y + cell - t - 2, cell, t + 2, d)
+        p.fillRect(x, y, t + 2, cell, d)
+        p.fillRect(x + cell - t - 2, y, t + 2, cell, d)
+        c = QColor(rgb[0], rgb[1], rgb[2], alpha)
+        p.fillRect(x + 1, y + 1, cell - 2, t, c)
+        p.fillRect(x + 1, y + cell - 1 - t, cell - 2, t, c)
+        p.fillRect(x + 1, y + 1, t, cell - 2, c)
+        p.fillRect(x + cell - 1 - t, y + 1, t, cell - 2, c)
+
+    def _draw_cell_candy(self, p: QPainter, x: int, y: int, cell: int,
+                         rgb: tuple, alpha: int) -> None:
+        """Arcade candy: rounded gradient block with a wet gloss band.
+        Layers: soft drop shadow → body gradient (light top, deep bottom)
+        → darker outline → top gloss. Reads juicy at 17px, still clean at 8.
+        """
+        p.save()
+        p.setRenderHint(QPainter.Antialiasing, True)
+        rad = max(2.0, cell / 4.5)
+        body = QRectF(x + 0.5, y + 0.5, cell - 1.0, cell - 1.0)
+
+        # Soft shadow under the block anchors it on bright wallpapers.
+        sh = QPainterPath()
+        sh.addRoundedRect(body.translated(0, max(1.0, cell / 12)), rad, rad)
+        p.fillPath(sh, QColor(20, 10, 30, 70 * alpha // 255))
+
+        grad = QLinearGradient(x, y, x, y + cell)
+        grad.setColorAt(0.0, QColor(min(255, rgb[0] + 75), min(255, rgb[1] + 75),
+                                    min(255, rgb[2] + 75), alpha))
+        grad.setColorAt(0.45, QColor(rgb[0], rgb[1], rgb[2], alpha))
+        grad.setColorAt(1.0, QColor(rgb[0] * 62 // 100, rgb[1] * 62 // 100,
+                                    rgb[2] * 62 // 100, alpha))
+        path = QPainterPath()
+        path.addRoundedRect(body, rad, rad)
+        p.fillPath(path, grad)
+
+        pen = QPen(QColor(rgb[0] * 45 // 100, rgb[1] * 45 // 100,
+                          rgb[2] * 45 // 100, 200 * alpha // 255))
+        pen.setWidthF(1.0)
+        p.setPen(pen)
+        p.drawPath(path)
+
+        # Gloss: bright band across the top third, like light on hard candy.
+        if cell >= 9:
+            gloss = QPainterPath()
+            gloss.addRoundedRect(
+                QRectF(x + 2.0, y + 1.5, cell - 4.0, cell * 0.38),
+                max(1.0, rad - 1.0), max(1.0, rad - 1.0))
+            ggrad = QLinearGradient(x, y, x, y + cell * 0.45)
+            ggrad.setColorAt(0.0, QColor(255, 255, 255, 150 * alpha // 255))
+            ggrad.setColorAt(1.0, QColor(255, 255, 255, 0))
+            p.fillPath(gloss, ggrad)
+        p.restore()
+
     def _draw_cell_neon(self, p: QPainter, x: int, y: int, cell: int,
                         rgb: tuple, alpha: int) -> None:
         """Cyberpunk lit-tube look on a transparent canvas. Three layers:
           1. Dark drop-shadow halo — gives bright wallpapers a local "wall"
              for the colored glow to land on; invisible on dark backgrounds.
-          2. Colored glow halo — the actual neon bleed, on top of the shadow.
-          3. Dim interior + bright rim — the lit glass tube itself.
-        Adjacent cells' shadows stack into a darker zone (good — reads as a
+          2. Colored bloom — rounded, graded, so the bleed looks like light
+             instead of stacked rectangles.
+          3. Near-black interior + saturated rim + white tube core.
+        Adjacent cells' halos stack into a darker zone (good — reads as a
         single lit object), while empty cells stay fully transparent.
         """
-        # Layer 1: black drop-shadow halo. Reach a bit further than the color
-        # halo so the colored bleed always lands on a darker pixel.
+        p.save()
+        p.setRenderHint(QPainter.Antialiasing, True)
+        rad = max(2.0, cell / 5.0)
+
+        def rpath(r: float) -> QPainterPath:
+            pp = QPainterPath()
+            pp.addRoundedRect(QRectF(x - r, y - r, cell + 2 * r, cell + 2 * r),
+                              rad + r, rad + r)
+            return pp
+
+        # Layer 1: dark backstop, reaching past the colored bloom.
         sh_r = max(2, cell // 4)
-        for r, base_a in ((sh_r, 30), (max(1, sh_r * 2 // 3), 70),
-                          (max(1, sh_r // 3), 120)):
-            sa = base_a * alpha // 255 if alpha < 255 else base_a
-            p.fillRect(x - r, y - r, cell + 2 * r, cell + 2 * r,
-                       QColor(0, 0, 0, sa))
-        # Layer 2: colored glow. Tighter radius than the shadow so the dark
-        # outer ring frames the colored inner ring.
+        for r, base_a in ((sh_r, 36), (sh_r * 0.55, 80)):
+            sa = base_a * alpha // 255
+            p.fillPath(rpath(r), QColor(4, 2, 12, sa))
+        # Layer 2: colored bloom, tighter than the shadow so the dark outer
+        # ring frames the lit inner ring.
         glow_r = max(2, cell // 6)
-        for r, base_a in ((glow_r, 60), (max(1, glow_r // 2), 130)):
-            ga = base_a * alpha // 255 if alpha < 255 else base_a
-            p.fillRect(x - r, y - r, cell + 2 * r, cell + 2 * r,
-                       QColor(rgb[0], rgb[1], rgb[2], ga))
-        # Layer 3: dimmed interior + bright rim — the glass tube. Skip the dim
-        # interior on tiny cells where the rim would already eat the square.
+        for r, base_a in ((glow_r, 56), (glow_r * 0.45, 120)):
+            ga = base_a * alpha // 255
+            p.fillPath(rpath(r), QColor(rgb[0], rgb[1], rgb[2], ga))
+
+        # Layer 3: the tube. Near-black glass with a faint vertical lift...
+        body = QPainterPath()
+        body.addRoundedRect(QRectF(x + 0.5, y + 0.5, cell - 1.0, cell - 1.0),
+                            rad, rad)
         if cell >= 10:
-            dim = QColor(rgb[0] * 32 // 100, rgb[1] * 32 // 100,
-                         rgb[2] * 32 // 100, alpha)
-            p.fillRect(x, y, cell, cell, dim)
-            rim_w = 2 if cell >= 14 else 1
+            grad = QLinearGradient(x, y, x, y + cell)
+            grad.setColorAt(0.0, QColor(rgb[0] * 30 // 100, rgb[1] * 30 // 100,
+                                        rgb[2] * 30 // 100, alpha))
+            grad.setColorAt(1.0, QColor(rgb[0] * 14 // 100, rgb[1] * 14 // 100,
+                                        rgb[2] * 14 // 100, alpha))
+            p.fillPath(body, grad)
+            # ...a fully saturated rim (the colored glass edge)...
+            pen = QPen(QColor(rgb[0], rgb[1], rgb[2], alpha))
+            pen.setWidthF(1.6 if cell >= 14 else 1.0)
+            p.setPen(pen)
+            p.drawPath(body)
+            # ...and the white-hot gas core just inside the rim.
+            if cell >= 14:
+                core = QPainterPath()
+                inset = 2.4
+                core.addRoundedRect(
+                    QRectF(x + inset, y + inset,
+                           cell - 2 * inset, cell - 2 * inset),
+                    max(1.0, rad - 1.5), max(1.0, rad - 1.5))
+                cpen = QPen(QColor(min(255, rgb[0] + 170),
+                                   min(255, rgb[1] + 170),
+                                   min(255, rgb[2] + 170), 215 * alpha // 255))
+                cpen.setWidthF(1.0)
+                p.setPen(cpen)
+                p.drawPath(core)
         else:
-            p.fillRect(x, y, cell, cell, QColor(rgb[0], rgb[1], rgb[2], alpha))
-            rim_w = 1
-        # Bright rim — pushed close to white so it reads as the lit gas inside
-        # the glass, not just a slightly-lighter version of the fill.
-        rim = QColor(min(255, rgb[0] + 130), min(255, rgb[1] + 130),
-                     min(255, rgb[2] + 130), alpha)
-        p.fillRect(x, y, cell, rim_w, rim)
-        p.fillRect(x, y + cell - rim_w, cell, rim_w, rim)
-        p.fillRect(x, y, rim_w, cell, rim)
-        p.fillRect(x + cell - rim_w, y, rim_w, cell, rim)
+            # Tiny cells: solid lit fill, no room for tube anatomy.
+            p.fillPath(body, QColor(rgb[0], rgb[1], rgb[2], alpha))
+        p.restore()
+
+    def _draw_cell_glass(self, p: QPainter, x: int, y: int, cell: int,
+                         rgb: tuple, alpha: int) -> None:
+        """Frosted ice: translucent body (the wallpaper shows through),
+        bright top rim where light enters, darker base edge. A thin cool
+        outline keeps the pane legible on white backgrounds."""
+        p.save()
+        p.setRenderHint(QPainter.Antialiasing, True)
+        rad = max(2.0, cell / 4.0)
+        body = QRectF(x + 0.5, y + 0.5, cell - 1.0, cell - 1.0)
+        path = QPainterPath()
+        path.addRoundedRect(body, rad, rad)
+
+        grad = QLinearGradient(x, y, x, y + cell)
+        grad.setColorAt(0.0, QColor(min(255, rgb[0] + 28), min(255, rgb[1] + 28),
+                                    min(255, rgb[2] + 28), 225 * alpha // 255))
+        grad.setColorAt(0.55, QColor(rgb[0], rgb[1], rgb[2], 188 * alpha // 255))
+        grad.setColorAt(1.0, QColor(rgb[0] * 72 // 100, rgb[1] * 74 // 100,
+                                    min(255, rgb[2] * 86 // 100 + 14),
+                                    205 * alpha // 255))
+        p.fillPath(path, grad)
+
+        # Cool dark outline — the anchor that survives bright wallpapers.
+        pen = QPen(QColor(14, 30, 56, 195 * alpha // 255))
+        pen.setWidthF(1.0)
+        p.setPen(pen)
+        p.drawPath(path)
+
+        # Light enters from above: crisp white top rim...
+        if cell >= 8:
+            rim = QPainterPath()
+            rim.addRoundedRect(QRectF(x + 1.5, y + 1.5, cell - 3.0,
+                                      max(1.5, cell / 8.0)),
+                               max(1.0, rad - 1.0), max(1.0, rad - 1.0))
+            p.fillPath(rim, QColor(255, 255, 255, 150 * alpha // 255))
+            # ...and pools into blue shadow at the base of the pane.
+            p.fillRect(int(x + 2), int(y + cell - 2), cell - 4, 1,
+                       QColor(24, 48, 88, 130 * alpha // 255))
+        p.restore()
+
+    def _draw_cell_lcd(self, p: QPainter, x: int, y: int, cell: int,
+                       rgb: tuple, alpha: int) -> None:
+        """DMG block: solid ink pixel with a 1px LCD gap and, on larger
+        cells, the classic pale inner outline that makes GB tetrominoes read
+        as little frames."""
+        g = 1 if cell >= 8 else 0
+        p.fillRect(x + g, y + g, cell - 2 * g, cell - 2 * g,
+                   QColor(rgb[0], rgb[1], rgb[2], alpha))
+        if cell >= 11:
+            pale = self.theme.bg_rgb
+            pa = 170 * alpha // 255
+            ins = g + 2
+            inner = cell - 2 * ins
+            c = QColor(pale[0], pale[1], pale[2], pa)
+            p.fillRect(x + ins, y + ins, inner, 1, c)
+            p.fillRect(x + ins, y + ins + inner - 1, inner, 1, c)
+            p.fillRect(x + ins, y + ins, 1, inner, c)
+            p.fillRect(x + ins + inner - 1, y + ins, 1, inner, c)
+
+    def _draw_panel(self, p: QPainter, bx: int, by: int, bw: int, bh: int,
+                    cell: int) -> None:
+        """Retro LCD screen behind the playfield: pale pea-green pane, darker
+        bezel, and the faint pixel grid every real LCD has."""
+        theme = self.theme
+        pad = max(3, cell // 2)
+        p.save()
+        p.setRenderHint(QPainter.Antialiasing, True)
+        pane = QRectF(bx - pad, by - pad, bw + 2 * pad, bh + 2 * pad)
+        path = QPainterPath()
+        path.addRoundedRect(pane, 6.0, 6.0)
+        p.fillPath(path, QColor(theme.bg_rgb[0], theme.bg_rgb[1],
+                                theme.bg_rgb[2], theme.bg_alpha))
+        pen = QPen(QColor(56, 72, 14, 235))
+        pen.setWidthF(2.0)
+        p.setPen(pen)
+        p.drawPath(path)
+        p.restore()
+        # Pixel grid, clipped to the board area so it never crosses the bezel.
+        grid_c = QColor(15, 56, 15, 14)
+        for gx in range(1, BOARD_W):
+            p.fillRect(bx + gx * cell, by, 1, bh, grid_c)
+        for gy in range(1, BOARD_H):
+            p.fillRect(bx, by + gy * cell, bw, 1, grid_c)
 
     def _draw_hold(self, p: QPainter, ox: int, oy: int, cell: int) -> None:
         kind = self.game.hold
@@ -368,11 +554,25 @@ class BoardView(QWidget):
         off_x = ox + (HOLD_W_CELLS * cell - area_w) // 2 + (4 - w_cells) * scale // 2
         off_y = oy + cell // 2 + (3 - h_cells) * scale // 2
         alpha = 100 if dim else 255
+        # Retro: minis float outside the LCD pane — give each its own chip
+        # of screen so the ink stays legible against the desktop.
+        if self.theme.panel:
+            pale = self.theme.bg_rgb
+            p.save()
+            p.setRenderHint(QPainter.Antialiasing, True)
+            chip = QPainterPath()
+            chip.addRoundedRect(
+                QRectF(off_x - 4, off_y - 4,
+                       w_cells * scale + 8, h_cells * scale + 8), 4.0, 4.0)
+            p.fillPath(chip, QColor(pale[0], pale[1], pale[2],
+                                    self.theme.bg_alpha))
+            p.restore()
+        # Route through the themed cell renderer so the preview carries the
+        # same identity as the board (candy stays candy, neon glows).
         for dx, dy in minos:
             x = off_x + (dx - min_dx) * scale
             y = off_y + (dy - min_dy) * scale
-            rgb = self.theme.block_colors[kind]
-            p.fillRect(x, y, scale, scale, QColor(rgb[0], rgb[1], rgb[2], alpha))
+            self._draw_cell(p, x, y, scale, kind, alpha=alpha)
 
     # ---- effects trigger --------------------------------------------------
     def trigger_clear_effect(self, rows: List[int], piece_kind: str) -> None:
